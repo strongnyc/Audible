@@ -1,0 +1,409 @@
+# Chris Strong
+# strongnyc2@gmail.com
+# 630-788-3175
+# Former contractor for Audible, reported to David Kornfield at the time
+# Worked on Feature Registry and Alexa NLP attribution
+# Let's import the latest labeled IMDB data from Stanford
+%mkdir ../data
+!wget -O ../data/aclImdb_v1.tar.gz http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz
+!tar -zxf ../data/aclImdb_v1.tar.gz -C ../data
+--2024-02-25 21:42:18--  http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz
+Resolving ai.stanford.edu (ai.stanford.edu)... 171.64.68.10
+Connecting to ai.stanford.edu (ai.stanford.edu)|171.64.68.10|:80... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 84125825 (80M) [application/x-gzip]
+Saving to: ‘../data/aclImdb_v1.tar.gz’
+
+../data/aclImdb_v1. 100%[===================>]  80.23M  7.70MB/s    in 12s     
+
+2024-02-25 21:42:31 (6.57 MB/s) - ‘../data/aclImdb_v1.tar.gz’ saved [84125825/84125825]
+
+# Import anticipated libraries for the case study
+from bs4 import BeautifulSoup  # important for web-scraping
+import pandas as pd
+import matplotlib.pyplot as plt
+import re
+from nltk.tokenize import word_tokenize
+from nltk.stem import PorterStemmer
+import plotly.express as px
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+import warnings
+import openai
+import nltk
+nltk.download("stopwords")
+[nltk_data] Downloading package stopwords to /home/sagemaker-
+[nltk_data]     user/nltk_data...
+[nltk_data]   Package stopwords is already up-to-date!
+True
+# Data
+import os
+import glob
+
+def read_imdb_data(data_dir='../data/aclImdb'):
+    data = {}
+    labels = {}
+    
+    for data_type in ['train', 'test']:
+        data[data_type] = {}
+        labels[data_type] = {}
+        
+        for sentiment in ['pos', 'neg']:
+            data[data_type][sentiment] = []
+            labels[data_type][sentiment] = []
+            
+            path = os.path.join(data_dir, data_type, sentiment, '*.txt')
+            files = glob.glob(path)
+            
+            for f in files:
+                with open(f) as review:
+                    data[data_type][sentiment].append(review.read())
+                    # Here we represent a positive review by '1' and a negative review by '0'
+                    labels[data_type][sentiment].append(1 if sentiment == 'pos' else 0)
+                    
+            assert len(data[data_type][sentiment]) == len(labels[data_type][sentiment]), \
+                    "{}/{} data size does not match labels size".format(data_type, sentiment)
+                
+    return data, labels
+data, labels = read_imdb_data()
+print("IMDB reviews: train = {} pos / {} neg, test = {} pos / {} neg".format(
+            len(data['train']['pos']), len(data['train']['neg']),
+            len(data['test']['pos']), len(data['test']['neg'])))
+IMDB reviews: train = 12500 pos / 12500 neg, test = 12500 pos / 12500 neg
+df = pd.DataFrame(data, columns=['test'])
+df.shape
+(2, 1)
+import os
+
+def fetch_reviews(path):
+  data = []
+  #path = 'aclImdb/train/pos/'
+  files = [f for f in os.listdir(path)]
+  for file in files:
+    with open(path+file, "r", encoding='utf8') as f:
+      data.append(f.read())
+      
+  return data
+import pandas as pd
+
+df_train_pos = pd.DataFrame({'review': fetch_reviews('../data/aclImdb/train/pos/'), 'label': 1})
+df_train_neg = pd.DataFrame({'review': fetch_reviews('../data/aclImdb/train/neg/'), 'label': 0})
+
+df_test_pos = pd.DataFrame({'review': fetch_reviews('../data/aclImdb/test/pos/'), 'label': 1})
+df_test_neg = pd.DataFrame({'review': fetch_reviews('../data/aclImdb/test/neg/'), 'label': 0})
+
+# Merging all df's for data cleaning and preprocessing step.
+df = pd.concat([df_train_pos, df_train_neg, df_test_pos, df_test_neg], ignore_index=True)
+print("Total reviews in df: ", df.shape)
+df.head()
+Total reviews in df:  (50000, 2)
+review	label
+0	Zentropa has much in common with The Third Man...	1
+1	Zentropa is the most original movie I've seen ...	1
+2	Lars Von Trier is never backward in trying out...	1
+3	*Contains spoilers due to me having to describ...	1
+4	That was the first thing that sprang to mind a...	1
+df.shape
+(50000, 2)
+df.info()
+<class 'pandas.core.frame.DataFrame'>
+RangeIndex: 50000 entries, 0 to 49999
+Data columns (total 2 columns):
+ #   Column  Non-Null Count  Dtype 
+---  ------  --------------  ----- 
+ 0   review  50000 non-null  object
+ 1   label   50000 non-null  int64 
+dtypes: int64(1), object(1)
+memory usage: 781.4+ KB
+df = df.rename(columns={'label': 'sentiment'})
+
+df['sentiment'].value_counts().plot.pie(explode=[0,0.1], autopct='%2.0f%%', startangle=310, colors = ["#bcbddc", "#efedf5"])
+plt.title("Distribution of Positive / Negative Emotions")
+Text(0.5, 1.0, 'Distribution of Positive / Negative Emotions')
+No description has been provided for this image
+for i in range(3):
+    print("Review: ", [i])
+    print(df['review'].iloc[i], "\n")
+    print("Sentiment: ", df['sentiment'].iloc[i], "\n\n")
+Review:  [0]
+Zentropa has much in common with The Third Man, another noir-like film set among the rubble of postwar Europe. Like TTM, there is much inventive camera work. There is an innocent American who gets emotionally involved with a woman he doesn't really understand, and whose naivety is all the more striking in contrast with the natives.<br /><br />But I'd have to say that The Third Man has a more well-crafted storyline. Zentropa is a bit disjointed in this respect. Perhaps this is intentional: it is presented as a dream/nightmare, and making it too coherent would spoil the effect. <br /><br />This movie is unrelentingly grim--"noir" in more than one sense; one never sees the sun shine. Grim, but intriguing, and frightening. 
+
+Sentiment:  1 
+
+
+Review:  [1]
+Zentropa is the most original movie I've seen in years. If you like unique thrillers that are influenced by film noir, then this is just the right cure for all of those Hollywood summer blockbusters clogging the theaters these days. Von Trier's follow-ups like Breaking the Waves have gotten more acclaim, but this is really his best work. It is flashy without being distracting and offers the perfect combination of suspense and dark humor. It's too bad he decided handheld cameras were the wave of the future. It's hard to say who talked him away from the style he exhibits here, but it's everyone's loss that he went into his heavily theoretical dogma direction instead. 
+
+Sentiment:  1 
+
+
+Review:  [2]
+Lars Von Trier is never backward in trying out new techniques. Some of them are very original while others are best forgotten.<br /><br />He depicts postwar Germany as a nightmarish train journey. With so many cities lying in ruins, Leo Kessler a young American of German descent feels obliged to help in their restoration. It is not a simple task as he quickly finds out.<br /><br />His uncle finds him a job as a night conductor on the Zentropa Railway Line. His job is to attend to the needs of the passengers. When the shoes are polished a chalk mark is made on the soles. A terrible argument ensues when a passenger's shoes are not chalked despite the fact they have been polished. There are many allusions to the German fanaticism of adherence to such stupid details.<br /><br />The railway journey is like an allegory representing man's procession through life with all its trials and tribulations. In one sequence Leo dashes through the back carriages to discover them filled with half-starved bodies appearing to have just escaped from Auschwitz . These images, horrible as they are, are fleeting as in a dream, each with its own terrible impact yet unconnected.<br /><br />At a station called Urmitz Leo jumps from the train with a parceled bomb. In view of many by-standers he connects the bomb to the underside of a carriage. He returns to his cabin and makes a connection to a time clock. Later he jumps from the train (at high speed) and lies in the cool grass on a river bank. Looking at the stars above he decides that his job is to build and not destroy. Subsequently as he sees the train approaching a giant bridge he runs at breakneck speed to board the train and stop the clock. If you care to analyse the situation it is a completely impossible task. Quite ridiculous in fact. It could only happen in a dream.<br /><br />It's strange how one remembers little details such as a row of cups hanging on hooks and rattling away with the swaying of the train.<br /><br />Despite the fact that this film is widely acclaimed, I prefer Lars Von Trier's later films (Breaking the Waves and The Idiots). The bomb scene described above really put me off. Perhaps I'm a realist. 
+
+Sentiment:  1 
+
+
+df.groupby(['sentiment'])[['sentiment']].count()
+sentiment
+sentiment	
+0	25000
+1	25000
+def no_of_words(text):
+    words= text.split()
+    word_count = len(words)
+    return word_count
+df['word_count'] = df['review'].apply(no_of_words)
+df.head(10)
+review	sentiment	word_count
+0	Zentropa has much in common with The Third Man...	1	121
+1	Zentropa is the most original movie I've seen ...	1	115
+2	Lars Von Trier is never backward in trying out...	1	387
+3	*Contains spoilers due to me having to describ...	1	471
+4	That was the first thing that sprang to mind a...	1	585
+5	I had started to lose my faith in films of rec...	1	206
+6	Critics need to review what they class as a qu...	1	221
+7	It is not every film's job to stimulate you su...	1	325
+8	The best way for me to describe Europa, which ...	1	166
+9	Released as Zentropa in North America to avoid...	1	598
+fig, ax = plt.subplots(1,2, figsize=(10,6))
+ax[0].hist(df[df['sentiment'] == 1]['word_count'], label='Positive', color='blue', rwidth=0.8);
+ax[1].hist(df[df['sentiment'] == 0]['word_count'], label='Negative', color='red', rwidth=0.8);
+
+ax[0].legend(loc='upper right');
+ax[1].legend(loc='upper right');
+
+fig.suptitle("Number of words in review")
+plt.show()
+
+# Note, the longer tail for negative reviews in the histogram
+No description has been provided for this image
+# Remove clutter from the reviews, like @ and https
+import nltk
+nltk.download('punkt')
+
+stop_words = set(stopwords.words('english'))
+
+def process(review):
+    review = BeautifulSoup(review).get_text()
+    review = review.lower()
+    review = re.sub("[^a-zA-Z]",' ',review)
+    review = re.sub(r"https\S+|www\S+|http\S+", '', review, flags = re.MULTILINE)
+    review = re.sub(r'\@w+|\#', '', review)
+    review = re.sub(r'[^\w\s]', '', review)
+    review_tokens = word_tokenize(review)
+    filtered_review = [w for w in review_tokens if not w in stop_words]
+    return " ".join(filtered_review)
+[nltk_data] Downloading package punkt to /home/sagemaker-
+[nltk_data]     user/nltk_data...
+[nltk_data]   Package punkt is already up-to-date!
+ 
+df.review = df['review'].apply(process)
+/tmp/ipykernel_99/953786184.py:7: MarkupResemblesLocatorWarning: The input looks more like a filename than markup. You may want to open this file and pass the filehandle into Beautiful Soup.
+  review = BeautifulSoup(review).get_text()
+# Find and eliminate dupes
+duplicated_count = df.duplicated().sum()
+print("Number of duplicate entries: ", duplicated_count)
+Number of duplicate entries:  421
+df = df.drop_duplicates('review')
+stemmer = PorterStemmer()
+def stemming(data):
+    text = [stemmer.stem(word) for word in data]
+    return ''.join(text)
+df.review = df['review'].apply(lambda x: stemming(x))
+print(df.review)
+0        zentropa much common third man another noir li...
+1        zentropa original movie seen years like unique...
+2        lars von trier never backward trying new techn...
+3        contains spoilers due describe film techniques...
+4        first thing sprang mind watched closing credit...
+                               ...                        
+49995    basically run mill violent biker flick complet...
+49996    caught wild rebels one mystery science theatre...
+49997    decide watch wild rebels expect anything deep ...
+49998    wild rebels probably fun second film drive mov...
+49999    probably biggest thing wild rebels hurts hero ...
+Name: review, Length: 49575, dtype: object
+df['new_word_count'] = df['review'].apply(no_of_words)
+df.head()
+review	sentiment	word_count	new_word_count
+0	zentropa much common third man another noir li...	1	121	67
+1	zentropa original movie seen years like unique...	1	115	60
+2	lars von trier never backward trying new techn...	1	387	198
+3	contains spoilers due describe film techniques...	1	471	237
+4	first thing sprang mind watched closing credit...	1	585	301
+pos_reviews =  df[df.sentiment == 1]
+pos_reviews.head()
+review	sentiment	word_count	new_word_count
+0	zentropa much common third man another noir li...	1	121	67
+1	zentropa original movie seen years like unique...	1	115	60
+2	lars von trier never backward trying new techn...	1	387	198
+3	contains spoilers due describe film techniques...	1	471	237
+4	first thing sprang mind watched closing credit...	1	585	301
+neg_reviews =  df[df.sentiment == 0]
+neg_reviews.head()
+review	sentiment	word_count	new_word_count
+12500	rented curious yellow video store controversy ...	0	288	148
+12501	curious yellow risible pretentious steaming pi...	0	214	118
+12502	avoid making type film future film interesting...	0	93	49
+12503	film probably inspired godard masculin f minin...	0	118	57
+12504	oh brother hearing ridiculous film umpteen yea...	0	311	164
+from collections import Counter
+count = Counter()
+for text in pos_reviews['review'].values:
+    for word in text.split():
+        count[word] +=1
+count.most_common(15)
+[('film', 41952),
+ ('movie', 37645),
+ ('one', 27201),
+ ('like', 17645),
+ ('good', 14956),
+ ('story', 12895),
+ ('great', 12882),
+ ('time', 12694),
+ ('well', 12675),
+ ('see', 12219),
+ ('also', 10759),
+ ('really', 10700),
+ ('would', 10546),
+ ('even', 9566),
+ ('first', 9183)]
+pos_words = pd.DataFrame(count.most_common(15))
+pos_words.columns = ['word', 'count']
+pos_words.head()
+word	count
+0	film	41952
+1	movie	37645
+2	one	27201
+3	like	17645
+4	good	14956
+px.bar(pos_words, x='count', y='word', title='Common words in positive reviews', color = 'word')
+count = Counter()
+for text in neg_reviews['review'].values:
+    for word in text.split():
+        count[word] +=1
+count.most_common(15)
+[('movie', 49581),
+ ('film', 37165),
+ ('one', 25980),
+ ('like', 22183),
+ ('even', 15081),
+ ('good', 14567),
+ ('bad', 14547),
+ ('would', 13851),
+ ('really', 12216),
+ ('time', 12200),
+ ('see', 10593),
+ ('story', 10065),
+ ('get', 10014),
+ ('much', 9972),
+ ('people', 9334)]
+neg_words = pd.DataFrame(count.most_common(15))
+neg_words.columns = ['word', 'count']
+neg_words.head()
+word	count
+0	movie	49581
+1	film	37165
+2	one	25980
+3	like	22183
+4	even	15081
+px.bar(neg_words, x='count', y='word', title='Common words in negative reviews', color = 'word')
+#!pip install wordcloud
+# More descriptives
+from wordcloud import WordCloud
+
+words_list = df[df['sentiment']==1]['review'].unique().tolist()
+pos_words = " ".join(words_list)
+
+pos_wordcloud =  WordCloud(
+                  width=800, height = 500,            
+                  stopwords=stop_words).generate(pos_words)
+
+plt.figure(figsize=(8, 8), facecolor = None)
+plt.imshow(pos_wordcloud)
+plt.axis("off")
+plt.tight_layout(pad=0)
+plt.show()
+No description has been provided for this image
+words_list = df[df['sentiment']==0]['review'].unique().tolist()
+neg_words = " ".join(words_list)
+
+neg_wordcloud =  WordCloud(
+                  width=800, height = 500,            
+                  stopwords=stop_words).generate(neg_words)
+
+plt.figure(figsize=(8, 8), facecolor = None)
+plt.imshow(neg_wordcloud)
+plt.axis("off")
+plt.tight_layout(pad=0)
+plt.show()
+No description has been provided for this image
+X = df['review']
+Y = df['sentiment']
+X
+0        zentropa much common third man another noir li...
+1        zentropa original movie seen years like unique...
+2        lars von trier never backward trying new techn...
+3        contains spoilers due describe film techniques...
+4        first thing sprang mind watched closing credit...
+                               ...                        
+49995    basically run mill violent biker flick complet...
+49996    caught wild rebels one mystery science theatre...
+49997    decide watch wild rebels expect anything deep ...
+49998    wild rebels probably fun second film drive mov...
+49999    probably biggest thing wild rebels hurts hero ...
+Name: review, Length: 49575, dtype: object
+Y
+0        1
+1        1
+2        1
+3        1
+4        1
+        ..
+49995    0
+49996    0
+49997    0
+49998    0
+49999    0
+Name: sentiment, Length: 49575, dtype: int64
+# Convert text into a vector based on relevancy
+vect = TfidfVectorizer()
+X = vect.fit_transform(df['review'])
+# Use an 80/20 split (training - validation)
+x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=0.2, random_state=42)
+print("Size of x_train: ", (x_train.shape))
+print("Size of y_train: ", (y_train.shape))
+print("Size of x_test: ", (x_test.shape))
+print("Size of y_test: ", (y_test.shape))
+Size of x_train:  (39660, 101201)
+Size of y_train:  (39660,)
+Size of x_test:  (9915, 101201)
+Size of y_test:  (9915,)
+# From my previous experience in NLP, Logistic Regression is usually sufficient;  
+# however, XGBoost or Random Forest may be applied, depending on the resources available
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+
+logreg = LogisticRegression()
+logreg.fit(x_train, y_train)
+logreg_pred = logreg.predict(x_test)
+logreg_acc = accuracy_score(logreg_pred, y_test)
+print("Test accuracy: {:.2f}%".format(logreg_acc*100))
+Test accuracy: 89.20%
+print(confusion_matrix(y_test, logreg_pred))
+print("\n")
+print(classification_report(y_test, logreg_pred))
+
+# The precision is robust, while the F1-score is suitable for at-scale approaches
+[[4299  630]
+ [ 441 4545]]
+
+
+              precision    recall  f1-score   support
+
+           0       0.91      0.87      0.89      4929
+           1       0.88      0.91      0.89      4986
+
+    accuracy                           0.89      9915
+   macro avg       0.89      0.89      0.89      9915
+weighted avg       0.89      0.89      0.89      9915
